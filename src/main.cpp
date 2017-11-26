@@ -9,6 +9,7 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
 #include "spline.h"
+#include "Vehicle.h"
 
 using namespace std;
 
@@ -152,6 +153,21 @@ getXY(double s, double d, const vector<double> &maps_s, const vector<double> &ma
 
 }
 
+bool can_turn(Vehicle &self, vector<Vehicle> &cars, double &max) {
+    bool result = cars.empty();
+    for (auto &car : cars) {
+        if (!self.can_merge(car)) {
+            result = false;
+            break;
+        } else {
+            result = true;
+        }
+        max = car.getS() - self.getS() > max ? car.getS() : max;
+    }
+
+    return result;
+}
+
 int main() {
     uWS::Hub h;
 
@@ -188,14 +204,12 @@ int main() {
         map_waypoints_dx.push_back(d_x);
         map_waypoints_dy.push_back(d_y);
     }
-    // Current lane
-    int lane = 1;
 
     // Referencing velocity mph
     double ref_vel = 0.0;
 
     h.onMessage(
-            [&map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &lane, &ref_vel](
+            [&map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &ref_vel](
                     uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                     uWS::OpCode opCode) {
                 // "42" at the start of the message means there's a websocket message event.
@@ -203,7 +217,7 @@ int main() {
                 // The 2 signifies a websocket event
                 //auto sdata = string(data).substr(0, length);
                 //cout << sdata << endl;
-                if (length && length > 2 && data[0] == '4' && data[1] == '2') {
+                if (length > 2 && data[0] == '4' && data[1] == '2') {
 
                     auto s = hasData(data);
 
@@ -241,26 +255,96 @@ int main() {
                                 car_s = end_path_s;
                             }
 
+                            const double dec_prev_size = prev_size * .02;
+                            Vehicle the_car(car_s, car_d, car_speed);
                             bool too_close = false;
+                            int lane = the_car.getLane();
+
+                            vector<Vehicle> on_left;
+                            vector<Vehicle> on_right;
 
                             for (int i = 0; i < sensor_fusion.size(); i++) {
-                                // is car in my lane
                                 double d = sensor_fusion[i][6];
-                                if (d < 2 + 4 * lane + 2 && d > 2 + 4 * lane - 2) {
-                                    double vx = sensor_fusion[i][3];
-                                    double vy = sensor_fusion[i][4];
-                                    double check_speed = sqrt(vx * vx + vy * vy);
-                                    double check_car_s = sensor_fusion[i][5];
 
-                                    check_car_s += ((double)prev_size * .02 * check_speed);
+                                double vx = sensor_fusion[i][3];
+                                double vy = sensor_fusion[i][4];
+                                double check_speed = sqrt(vx * vx + vy * vy);
 
-                                    if (check_car_s > car_s && check_car_s - car_s < 25) {
+                                double check_car_s = sensor_fusion[i][5];
+
+                                check_car_s += (dec_prev_size * check_speed);
+                                Vehicle a_car(check_car_s, (int)d, check_speed);
+
+                                if (the_car.is_same_line(a_car)) {
+
+                                    if (the_car.is_too_close(a_car)) {
                                         too_close = true;
+
+                                        for (auto &k : sensor_fusion) {
+                                            double c_d = k[6];
+
+                                            double c_vx = k[3];
+                                            double c_vy = k[4];
+
+                                            double c_speed = sqrt(c_vx * c_vx + c_vy * c_vy);
+                                            double c_s = k[5];
+
+                                            c_s += dec_prev_size * c_speed;
+
+                                            Vehicle tmp(c_s, c_d, c_speed);
+                                            // Skipping the cars in the same lane; they don't play any role in our path planning
+                                            if (the_car.getLane() == tmp.getLane()) {
+                                                continue;
+                                            }
+                                            a_car = tmp;
+
+                                            bool is_on_next_lane = abs(a_car.getLane() - the_car.getLane()) == 1;
+
+                                            // Taking cars only from the next lanes and sort them based on the side
+                                            if (abs(a_car.getLane() - the_car.getLane()) == 1) {
+                                                if (a_car.getLane() > the_car.getLane()) {
+                                                    on_right.push_back(a_car);
+                                                } else if (a_car.getLane() < the_car.getLane()) {
+                                                    on_left.push_back(a_car);
+                                                }
+                                            }
+                                        }
+
                                         break;
                                     }
 
                                     too_close = false;
                                 }
+                            }
+
+                            if (too_close) {
+                                // if there are no cars on the left side, it's free to go.
+                                double left_max = -1.;
+                                bool can_turn_left = can_turn(the_car, on_left, left_max) && lane > 0;
+
+                                double right_max = -1.;
+                                bool can_turn_right = can_turn(the_car, on_right, right_max) && lane < 2;
+
+                                // Checking if we can merge in the left lane, it's prioritized, since it's usually the fastest lane
+                                if (can_turn_left && left_max > right_max && right_max > 0) {
+                                    lane -= 1;
+                                } else if (can_turn_right && right_max > 0){
+                                    lane += 1;
+                                } else if (left_max < 0 || right_max < 0) {
+                                    bool changed = false;
+                                    if (can_turn_left) {
+                                        lane -= 1;
+                                        changed = true;
+                                    }
+
+                                    if (!changed && can_turn_right) {
+                                        lane += 1;
+                                    }
+                                }
+                            }
+
+                            if (the_car.getLane() != lane) {
+                                too_close = false;
                             }
 
                             /* End of Sensor fusion block */
@@ -350,10 +434,10 @@ int main() {
                             double x_add_on = 0;
 
                             for (int i = 1; i <= 50 - previous_path_x.size(); i++) {
-                                if (too_close) {
-                                    ref_vel -= .2;
+                                if (too_close && ref_vel) {
+                                    ref_vel -= .25;
                                 } else if (ref_vel < 49.5) {
-                                    ref_vel += .2;
+                                    ref_vel += .25;
                                 }
 
                                 double N = target_dist / (.02 * ref_vel / 2.24);
