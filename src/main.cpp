@@ -16,6 +16,9 @@ using namespace std;
 // for convenience
 using json = nlohmann::json;
 
+const double D_SPEED = 0.224;
+const double MAX_VEL = 49.5;
+
 // For converting back and forth between radians and degrees.
 constexpr double pi() { return M_PI; }
 
@@ -259,6 +262,8 @@ int main() {
                             Vehicle the_car(car_s, car_d, car_speed);
                             bool too_close = false;
                             int lane = the_car.getLane();
+                            double target_speed = 0.0;
+                            double target_cardist = 0.0;
 
                             vector<Vehicle> on_left;
                             vector<Vehicle> on_right;
@@ -279,6 +284,8 @@ int main() {
 
                                     if (the_car.is_too_close(a_car)) {
                                         too_close = true;
+                                        target_speed = a_car.getSpeed();
+                                        target_cardist = a_car.getS() - the_car.getS();
 
                                         for (auto &k : sensor_fusion) {
                                             double c_d = k[6];
@@ -349,8 +356,6 @@ int main() {
 
                             /* End of Sensor fusion block */
 
-
-
                             // creating a list of evenly spaced x and y waypoint to interpolate them later with spline
                             vector<double> ptsx;
                             vector<double> ptsy;
@@ -406,13 +411,21 @@ int main() {
 
                             for (int i = 0; i < ptsx.size(); i++) {
 
-                                // shift car reference angle to 0 degrees
+                                // shift car reference angle to 0 degrees (restore)
                                 double shift_x = ptsx[i] - ref_x;
                                 double shift_y = ptsy[i] - ref_y;
 
                                 ptsx[i] = shift_x * cos(-ref_yaw) - shift_y * sin(-ref_yaw);
                                 ptsy[i] = shift_x * sin(-ref_yaw) + shift_y * cos(-ref_yaw);
                             }
+
+                            /* Trajectory planning block */
+                            /* Smooth paths where generated using the spline tool
+                             * as suggested in the classroom. By following the walkthrough
+                             * given in the classroom I was able to generate a smooth path
+                             * consisting of 50 points ahead of the vehicle. The points are
+                             * split such that at all steps the vehicle stays under the speed
+                             * and acceleration limits. */
 
                             tk::spline spline;
 
@@ -434,10 +447,31 @@ int main() {
                             double x_add_on = 0;
 
                             for (int i = 1; i <= 50 - previous_path_x.size(); i++) {
-                                if (too_close && ref_vel) {
-                                    ref_vel -= .25;
-                                } else if (ref_vel < 49.5) {
-                                    ref_vel += .25;
+                                if (target_cardist > 0. && target_cardist < 100.) {
+                                    // Speed control accordingly with the distance between the cars
+                                    double diff_speed = the_car.getSpeed() - target_speed;
+                                    if (too_close && ref_vel > D_SPEED) {
+                                        if (target_cardist < 10. && diff_speed < 3.) {
+                                            ref_vel -= D_SPEED / 4;
+                                        }
+                                        if (target_cardist < 10. && diff_speed < 6.) {
+                                            ref_vel -= D_SPEED / 2;
+                                        } else {
+                                            ref_vel -= D_SPEED;
+                                        }
+                                    } else if (ref_vel < MAX_VEL) {
+                                        if (target_cardist < 10. && diff_speed < 0. && diff_speed > -3.) {
+                                            ref_vel += D_SPEED / 4.;
+                                        } else if (target_cardist < 10. && diff_speed <= -3. && diff_speed > -6.) {
+                                            ref_vel += D_SPEED / 2.;
+                                        } else {
+                                            ref_vel += D_SPEED;
+                                        }
+                                    }
+                                } else {
+                                    if (ref_vel < MAX_VEL) {
+                                        ref_vel += D_SPEED;
+                                    }
                                 }
 
                                 double N = target_dist / (.02 * ref_vel / 2.24);
@@ -459,6 +493,7 @@ int main() {
                                 next_x_vals.push_back(x_point);
                                 next_y_vals.push_back(y_point);
                             }
+                            /* End of Trajectory planning block */
 
                             // Preparing data to send to sim
                             json msgJson;

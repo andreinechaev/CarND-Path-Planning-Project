@@ -17,6 +17,8 @@ private:
     double s_;
     double d_;
     double speed_;
+
+private:
     int lane_;
 
 public:
@@ -26,6 +28,8 @@ public:
     double getS() const;
 
     int getLane() const;
+
+    double getSpeed() const;
 
     bool is_same_line(Vehicle &that) const;
 

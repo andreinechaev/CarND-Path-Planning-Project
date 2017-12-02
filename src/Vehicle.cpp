@@ -31,7 +31,7 @@ bool Vehicle::is_too_close(Vehicle &that) const {
 }
 
 bool Vehicle::can_merge(Vehicle &that) const {
-    return that.s_ - s_ > MAX_DISTANCE + 1 || s_ - that.s_ > 5;
+    return that.s_ - s_ > MAX_DISTANCE + 5 || s_ - that.s_ > 5;
 }
 
 bool Vehicle::operator==(const Vehicle &rhs) const {
@@ -48,4 +48,8 @@ int Vehicle::getLane() const {
 
 double Vehicle::getS() const {
     return s_;
+}
+
+double Vehicle::getSpeed() const {
+    return speed_;
 }
